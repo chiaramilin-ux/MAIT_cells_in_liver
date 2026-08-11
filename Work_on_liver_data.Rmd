@@ -10,7 +10,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Extract the correct data
-11/08/2026
 
 I will subset the data to get only the liver data.
 
