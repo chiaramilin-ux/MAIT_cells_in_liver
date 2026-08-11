@@ -1,0 +1,264 @@
+---
+title: "Start with data online"
+author: "Chiara Milin"
+date: "2026-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Extract the correct data
+
+I will subset the data to get only the liver data.
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+data=readRDS("SeuObjxx.rds")
+View(data)
+data_filtered = data$Sample
+
+seurat_liver = subset(data, subset = grepl("liver", Sample, ignore.case = TRUE))
+table(seurat_liver$Sample)
+```
+
+I use a "pattern research" with the function grepl(), because all the liver samples have the word "liver" in their names. The argument ignore.case = TRUE allows the detection of "liver", "Liver" or "LIVER".
+
+I now need to add some meta data in order to get the patients' characteristics.
+
+```{r}
+metadata_patient = data.frame(patient_id=c('11183','11051','10113-1','10202','10380','10634','10738','9680','10205','9999','10113-2','9961','10742','10203','10291-2','11327','9932', '9991','11040','11471', '10291-1'), diabetes = c('No','No','No','No','No','No','No','No','No','No','No','No','No','Yes', 'Yes', 'Yes','Yes','Yes', 'Yes','Yes', 'Yes'), fibrosis = c('Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'No_fibrosis', 'No_fibrosis', 'No_fibrosis', 'Healthy', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis', 'Fibrosis'), fb_stage = c('F3', 'F1', 'F1', 'F1', 'F1', 'F1', 'F1', 'F1', 'F2', 'F0', 'F0', 'F0', 'H', 'F1', 'F1', 'F1', 'F2', 'F2', 'F3', 'F3', 'F1'))
+
+library(tibble)
+# 1. Temporary data.frame of metadata
+meta_cellules = seurat_liver@meta.data %>%
+  select(Patient_ID) %>%
+  rownames_to_column("Cell_ID") %>%       # Saving the cells' names
+  left_join(metadata_patient, by = c("Patient_ID" = "patient_id")) %>% 
+  column_to_rownames("Cell_ID")           # Put them back in row names
+seurat_liver = AddMetaData(object = seurat_liver, metadata = meta_cellules)
+# Verification
+head(seurat_liver@meta.data)
+```
+
+## Quality Control (QC) and selecting cells for further analysis
+
+A few QC metrics commonly used include the number of unique genes detected in each cell, the total number of molecules detected within a cell and the percentage of reads that map to the mitochondrial genome (calculated by the function PercentageFeatureSet()).
+
+```{r}
+seurat_liver[["percent.mt"]] = PercentageFeatureSet(seurat_liver, pattern = "^MT-")
+VlnPlot(seurat_liver, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+layout(matrix(c(1, 2, 3, 3), nrow = 2, byrow = TRUE))
+VlnPlot(seurat_liver, features = "nFeature_RNA", ncol = 1)
+VlnPlot(seurat_liver, features = "nCount_RNA", ncol = 1)
+VlnPlot(seurat_liver, features = "percent.mt", ncol = 1)
+```
+
+```{r}
+plot1 = FeatureScatter(seurat_liver, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 = FeatureScatter(seurat_liver, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+Plot 1 : No correlation (-0.03). Cells with a low cell count and/or a high percentage of mitochondria are often apoptotic, under stress or undergoing lysis.
+
+Plot 2 : overall linear relation (0.91) between nCount and nFeature. Cells with very few counts and few genes may be empty droplets, dead or severely degraded cells. On the contrary, cells with a very high number of counts and a very high number of genes are possible doublets/multiplets (two cells captured together).
+
+```{r}
+seurat_liver = subset(seurat_liver, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+
+Those standard criteria are coherent with the data, according to the violin and scatter plots.
+
+## Normalising the data
+
+```{r}
+seurat_liver = NormalizeData(seurat_liver, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+# Identification of highly variable features
+
+```{r}
+seurat_liver = FindVariableFeatures(seurat_liver, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 = head(VariableFeatures(seurat_liver), 10)
+
+# Plot variable features with and without labels
+plot1 = VariableFeaturePlot(seurat_liver)
+plot2 = LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+The 10 most variables genes are HLA-DRA, LYZ, CST3, PTGDS, SERPINA1, IL1B, CD79A, HLA-DPA1, TRBV20-1, XCL2.
+
+# Scaling the data
+
+```{r}
+all.genes = rownames(seurat_liver)
+seurat_liver = ScaleData(seurat_liver, features = all.genes)
+```
+
+# Perform linear dimensional reduction (PCA)
+
+```{r}
+seurat_liver = RunPCA(seurat_liver, features = VariableFeatures(object = seurat_liver), reduction.name = "pca") # I added reduction.name because PCA was not kept in the seurat package
+
+# Examine and visualise PCA results in a few different ways
+print(seurat_liver[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+```{r}
+VizDimLoadings(seurat_liver, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+DimPlot(seurat_liver, reduction = "pca") + NoLegend()
+```
+
+```{r}
+# Supervised approach
+DimHeatmap(seurat_liver, dims = 1, cells = 500, balanced = TRUE)
+```
+
+# Determine the "dimensionality" of the dataset
+
+```{r}
+ElbowPlot(seurat_liver)
+```
+
+I am keeping 20 components.
+
+# Cluster the cells
+
+```{r}
+seurat_liver = FindNeighbors(seurat_liver, dims = 1:20)
+seurat_liver = FindClusters(seurat_liver, resolution = 0.3)
+```
+
+31 communities have been found.
+
+```{r}
+# Look at cluster IDs of the first 5 cells
+head(Idents(seurat_liver), 5)
+```
+
+# Run non-linear dimensional reduction (uMAP/t-SNE)
+
+```{r}
+seurat_liver = RunUMAP(seurat_liver, dims = 1:20)
+```
+
+```{r}
+DimPlot(seurat_liver, reduction = "umap")
+```
+
+# Finding differentially-expressed features (cluster biomarkers)
+
+```{r}
+seurat_liver = JoinLayers(seurat_liver)
+seurat_liver.markers = FindAllMarkers(seurat_liver, only.pos = TRUE)
+seurat_liver.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1)
+
+marqueurs = table(seurat_liver.markers$cluster)
+write.xlsx(marqueurs, "Tableau_marqueurs.xlsx", rowNames = FALSE) # Number of cells in each cluster
+write.xlsx(seurat_liver.markers, "Marqueurs_par_cluster.xlsx", rowNames = FALSE) # All the markers in each cluster
+
+top_markers = seurat_liver.markers %>%
+  group_by(cluster) %>%
+  filter(avg_log2FC > 1) %>%
+  slice_max(order_by = avg_log2FC, n = 10) %>%  # top 10 markers per cluster
+  ungroup()
+write.xlsx(top_markers, "Meilleurs_marqueurs_par_cluster.xlsx", rowNames = FALSE)
+
+seurat_liver@misc$markers = FindAllMarkers(seurat_liver, min.pct = 0.25, logfc.threshold = 0.25)
+table(seurat_liver@misc$markers$cluster)
+top10_markers = as.data.frame(seurat_liver@misc$markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC))
+top10_markers
+
+library(openxlsx)
+write.xlsx(top10_markers, "Best_markers_by_cluster.xlsx", rowNames = FALSE)
+```
+
+In "Best_markers_by_cluster.xlsx" :
+
+- min.pct = 0.25 means that the gene must be expressed in at least 25 per cent of the cells in the cluster or comparison group
+
+- logfc.threshold = 0.25 means that only genes with a log2FC > 0.25 are selected
+
+- only.pos is not specified. By default: only.pos = FALSE
+
+So I end up with:the genes that are overexpressed in the cluster (positive log2FC) and the genes that are underexpressed in the cluster (negative log2FC).
+
+
+In "Meilleurs_marqueurs_par_cluster.xlsx", only the genes with avg_log2FC > 0 are selected.
+
+```{r}
+seurat_liver.markers = FindAllMarkers(seurat_liver, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20_markers = seurat_liver.markers %>%
+    group_by(cluster) %>%
+    slice_max(
+        order_by = avg_log2FC,
+        n = 20,
+        with_ties = FALSE
+    ) %>%
+    ungroup()
+write.xlsx(top20_markers, "Final_selection_of_clusters.xlsx", rowNames = FALSE)
+DoHeatmap(seurat_liver, features = top20_markers$gene) + NoLegend()
+```
+
+I chose this line to select my top 20 markers because I want to know which genes are: enriched, specific or highly expressed, not which genes are absent.
+
+```{r}
+VlnPlot(seurat_liver, features = c("CD3D", "LCK"))
+```
+
+```{r}
+# you can plot counts as well
+VlnPlot(seurat_liver, features = c("LTB", "CD2"), layer = "counts", log = TRUE)
+```
+
+```{r}
+FeaturePlot(seurat_liver, features = c("CD3D", "CD3E", "CD2", "CD52", "IL32", "CD3G", "LCK", "IL7R", "CD48"))
+```
+
+DoHeatmap() generates an expression heatmap for given cells and features. In this case, I am plotting the top 10 markers (or all markers if less than 10) for each cluster.
+
+```{r}
+DoHeatmap(seurat_liver, features = top10$gene) + NoLegend()
+```
+
+Now I am going to examine the file "Final_selected_markers.xlsx" to do research on the 20 most important markers for each cluster and try to annotate them.
+
+
+# Azimuth
+
+```{r}
+devtools::install_github("satijalab/AzimuthAPI")
+library(Seurat)
+library(AzimuthAPI)
+library(dplyr)
+auto_clustering = CloudAzimuth(seurat_liver)
+```
+
+```{r}
+hist(auto_clustering$final_level_confidence, breaks = 30, main = "Histogram of Softmax Probabilities",
+    xlab = "Softmax Probability", col = "skyblue", border = "white")
+```
+
+```{r}
+auto_clustering_qc = subset(auto_clustering, final_level_confidence > 0.5)
+auto_clustering_qc = RunUMAP(auto_clustering_qc, dims = 1:128, reduction = "azimuth_embed", reduction.name = "azimuth_umap")
+p2 = DimPlot(auto_clustering_qc, group.by = "full_hierarchical_labels", label.size = 1.5, label = T, reduction = "azimuth_umap", repel = TRUE) + NoLegend()
+p2
+```
+

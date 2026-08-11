@@ -1,0 +1,81 @@
+Var1;Freq
+abT (entry) cell;174
+Macrophage;244
+Monocyte;506
+Memory CD4 T cell;1344
+MAIT cell;1189
+GZMK CD8 T cell;2181
+Mast cell;452
+CD16 monocyte;135
+CD16 NK cell;1740
+Capillary EC;499
+CD56 NK cell;1977
+CD4 T cell;395
+Naive B cell;200
+GZMB CD8 T cell;1073
+NK cell;1256
+CD14 monocyte;442
+cDC;123
+Memory CD8 T cell;1386
+Tissue-resident NK cell;201
+GZMK+IL7R- CD8 T cell;150
+pDC;143
+ILC;79
+gdT cell;99
+Memory B cell;99
+GZMK+IL7R+ CD8 T cell;269
+cDC2;223
+cDC1;60
+Plasma cell;627
+B cell;108
+MHCII high CD14 monocyte;57
+Naive CD4 T cell;261
+MHCII low CD14 monocyte;84
+LYVE1 macrophage;64
+INF-activated T cell;5
+AFP+ fetal hepatocyte;680
+CD14/CD16 monocyte;8
+CD8 T cell;107
+T cell;298
+Treg cell;134
+Lymphatic EC;14
+Venous EC;113
+Other;29
+Neutrophil;1253
+Red blood cell;166
+HSC;5
+Naive CD8 T cell;22
+M1 macrophage;39
+Hepatocyte;131
+Arterial EC;590
+Endothelial cell;13
+CXCL6+ cholangiocyte;392
+Pericyte;55
+Hematopoietic precursor cell;3
+Glial cell;10
+Late hemoglobin+ erythroblast;29
+SPINK1+SGMS2+ cholangiocyte;23
+Cycling T/NK cell;143
+GZMK NK cell;4
+Intermediate EPCAM+ erythroblast;4
+KLRB1 CD8 T cell;45
+Tfh cell;6
+Dendritic cell;83
+mregDC;10
+Double negative T cell;8
+Erythroblast;3
+ProB cell;2
+Vascular smooth muscle cell;47
+Mesothelial cell;3
+T/NK cell;9
+Microglia;2
+Alveolar macrophage;6
+Early SOX4+ erythroblast;2
+Naive T cell;2
+Myeloid cell;1
+Lymphoid cell;1
+CLDN3+ epithelial cell;3
+MPP;10
+Cycling T cell;1
+Pre-pDC;3
+;22357

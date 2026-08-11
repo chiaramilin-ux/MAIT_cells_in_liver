@@ -1,0 +1,985 @@
+---
+title: "Work_on_MAIT_cells"
+author: "Chiara Milin"
+date: "2026-07-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# MAIT cells identification
+
+As MAIT cells have not been identified as a cluster, I will use 5 characteristical genes to separate them. I am working in the liver, on MAIT cells, some genes are characteristic : KLRB1 (CD161), SLC4A10 : allows to dissociate MAIT cells from T cells, TRAV1-2 : almost invariant alpha chain of the TCR, RORC : Transcription factor associated to effective MAIT cells, particularly the ones producing IL-17 and IL7R (CD127).
+
+However, hepatic MAIT cells often present a strong expression of genes linked with cytotoxicity et tissue residency : CXCR6, ZBTB16 (PLZF), KLRD1 (CD94), NKG7, GZMK (sometimes GZMB), IFNG and TNF.
+
+Thus, I will use the panel : KLRB1, SLC4A10, CXCR6, TRAV1-2 and ZBTB16 to distinguish MAIT cells from NK cells, conventional CD8 T cells and NKT cells.
+
+```{r}
+mait_genes = c("KLRB1", "SLC4A10", "CXCR6", "TRAV1-2", "ZBTB16")
+mait_genes %in% rownames(seurat_liver) # check if they are present in the object
+```
+
+The idea is to calculate a MAIT-cell score for each cells, select the ones with the highest score and finally check the cluster they are in.
+
+```{r}
+seurat_liver_2 = AddModuleScore(seurat_liver, features = list(mait_genes), name = "MAIT_score")
+seurat_liver_2$MAIT_score1
+```
+
+Let's visualise where the richest cells in MAIT genes are.
+
+```{r}
+FeaturePlot(seurat_liver_2, features = "MAIT_score1", reduction = "umap")
+```
+
+```{r}
+VlnPlot(seurat_liver_2, features = "MAIT_score1", group.by = "seurat_clusters")
+```
+
+Now, I identify the 5% richest cells in MAIT genes.
+
+```{r}
+threshold = quantile(seurat_liver_2$MAIT_score1, probs = 0.95)
+mait_cells = WhichCells(seurat_liver_2, expression = MAIT_score1 > threshold)
+```
+
+Check which cluster they are in.
+
+```{r}
+table(seurat_liver_2$seurat_clusters[mait_cells])
+```
+
+This result suggests that cluster 0 has the highest MAIT cells signature, followed by clusters 3 and 2. Th others have low scores. However, the score may be influenced by activated T cells, so I will try a stricter method.
+
+```{r}
+FeaturePlot(seurat_liver_2, features = mait_genes)
+```
+
+Then, I calculate the mean expression of the genes.
+
+```{r}
+exp = FetchData(seurat_liver_2, vars = mait_genes)
+seurat_liver_2$MAIT_mean = rowMeans(exp)
+quantile(seurat_liver_2$MAIT_mean, probs = c(0.5, 0.75, 0.9, 0.95, 0.99)) # check the scores to choose the threshold in the next line
+mait_cells_2 = WhichCells(seurat_liver_2, expression = MAIT_mean > 1.2151541)
+
+MAIT_cluster = subset(seurat_liver_2, cells = mait_cells_2)
+VlnPlot(MAIT_cluster, features = mait_genes, group.by = "Patient_ID")
+table(seurat_liver_2$seurat_clusters[mait_cells_2])
+```
+
+With this method, the result is the same : the principal cluster containing MAIT cells is the number 0, followed by the clusters 3 and 2. I created a MAIT cluster by conserving the cells with the highest score.
+
+```{r}
+healthy_patients = subset(MAIT_cluster, subset = fibrosis == "Healthy")
+sick_patients = subset(MAIT_cluster, subset = fibrosis %in% c("Fibrosis", "No_fibrosis"))
+```
+
+I partitioned the cluster between sick and sane patients or through the different stages of the disease. Which gene expression are changing in MAIT cells through the disease ?
+
+```{r}
+healthy_sick = FindMarkers(MAIT_cluster, ident.1 = "Healthy", ident.2 = c("Fibrosis", "No_fibrosis"), group.by = "fibrosis")
+library(openxlsx)
+write.xlsx(healthy_sick, "Healthy_vs_sick.xlsx", rowNames = FALSE) # genes more expressed in healthy
+
+stages = c("F0", "F1", "F2", "F3")
+comparisons = combn(stages, 2, simplify = FALSE)
+results = lapply(comparisons, function(x) {
+  FindMarkers(MAIT_cluster, ident.1 = x[1], ident.2 = x[2],group.by = "fb_stage")
+})
+names(results) = sapply(comparisons, function(x) paste(x, collapse = "_vs_"))
+names(results)
+# Add plots
+
+library(ggplot2)
+res = results$F0_vs_F2
+res$gene = rownames(res)
+ggplot(res, aes(x = avg_log2FC, y = -log10(p_val_adj))) + geom_point(alpha = 0.6) + theme_classic() + xlab("Log2 Fold Change") + ylab("-log10(padj)") + ggtitle("F0 vs F2")
+res$Significant = ifelse(res$p_val_adj < 0.05 & abs(res$avg_log2FC) > 0.25, "Oui", "Non")
+ggplot(res, aes(avg_log2FC, -log10(p_val_adj), color = Significant)) + geom_point() + scale_color_manual(values = c("grey", "red")) + theme_classic()
+```
+
+```{r}
+top_genes = rownames(res[order(res$p_val_adj), ][1:10, ])
+DoHeatmap(MAIT_cluster, features = top_genes, group.by = "fb_stage")
+```
+
+```{r}
+top20 = rownames(head(res[order(abs(res$avg_log2FC), decreasing = TRUE), ], 20))
+DotPlot(MAIT_cluster, features = top20, group.by = "fb_stage") + RotatedAxis()
+```
+
+```{r}
+library(pheatmap)
+genes = unique(unlist(lapply(results, rownames)))
+fc_matrix = sapply(results, function(x) {
+  tmp = x[genes, "avg_log2FC"]
+  tmp[is.na(tmp)] = 0
+  tmp
+})
+rownames(fc_matrix) = genes
+var_genes = names(sort(apply(fc_matrix, 1, var), decreasing = TRUE))[1:50]
+pheatmap(fc_matrix[var_genes, ], scale = "row")
+```
+
+The principle behind pseudo-bulk is to aggregate the counts from cells belonging to the same sample (patient) so that the patient, rather than the cell, becomes the statistical unit. This is the recommended method for comparing gene expression between patients using single-cell RNA-seq data. I am going to check the evolution of genes about cytotoxicity, activation, inflammation and exhaustion/dysfunction.
+
+```{r}
+# Pseudobulk creation
+pseudo = AggregateExpression(MAIT_cluster, assays = "RNA", slot = "counts", group.by = "Patient_ID", return.seurat = FALSE)
+metadata = data.frame(patient = c("g10113-1","g10113-2","g10202","g10203","g10205","g10291-1","g10291-2","g10380","g10634","g10738","g10742","g11040","g11051","g11183","g11327","g11471","g9680","g9932","g9961","g9991","g9999"), group = c("F1", "F0", "F1", "F1", "F2", "F1", "F1", "F1", "F1", "F1", "H", "F3", "F1", "F3", "F1", "F3", "F1", "F2", "F0", "F2", "F0"))
+rownames(metadata) = metadata$patient
+```
+
+```{r}
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+# install.packages("BiocManager")
+
+# BiocManager::install("DESeq2")
+library(DESeq2)
+
+# Differential analysis
+metadata$group = factor(metadata$group, levels = c("H","F0","F1","F2","F3"), ordered = TRUE)
+metadata$fibrosis_score = c(0,1,2,3,4)[match(metadata$group,c("H","F0","F1","F2","F3"))]
+dds_trend = DESeqDataSetFromMatrix(countData = pseudo$RNA, colData = metadata, design = ~ fibrosis_score)
+dds_2 = DESeq(dds_trend)
+res_2 = results(dds_2) # Considering fibrosis as an evolution
+write.csv(res_2, "Evolution_gene_expression_in_MASLD.csv")
+
+res_df = data.frame(gene = rownames(res_2), res_2)
+top_5_genes = head(res_df$gene[order(res_df$padj)], 5)
+vsd = vst(dds_2, blind = FALSE)
+expression_matrix = assay(vsd)
+
+library(dplyr) # Visualisation
+library(tidyr)
+plot_df = as.data.frame(t(expression_matrix[top_5_genes, ]))
+plot_df$group = metadata$group
+plot_long = pivot_longer(plot_df, cols = all_of(top_5_genes), names_to = "gene", values_to = "expression")
+ggplot(plot_long, aes(x = group, y = expression, fill = group)) + geom_violin(trim = FALSE) + geom_jitter(width = 0.1, size = 0.5) + facet_wrap(~gene, scales = "free_y") + theme_classic()
+
+# Robustness analysis (check if the unique healthy control is not an outlier)
+vsd = vst(dds_trend)
+plotPCA(vsd, intgroup="group") # Batch effect
+```
+
+dds contains the pseudobulk matrix with all the genes and the number of cells expressing each gene in each patient + all the metadata (stage of fibrosis for each patient and patient ID) + design = ~ group means 'I would like to explain the differences in gene expression in relation to the stage of fibrosis'.
+
+The analysis is really done with ds :
+
+- Step 1 : Calculate the size factors = normalisation of sequencing depths
+
+- Step 2 : Estimate the variance for each gene.
+
+- Step 3 : Fit a negative binomial model.
+
+- Step 4 : Test whether the group has a significant effect on expression.
+
+res compares stage 3 fibrosis and healthy patient : for each gene, I get the p value, the log2FC and the padj. For example, if log2FC = 2 ==> F3 expression is 4 times higher than H or if log2FC = -2 ==> F3 expression is 4 times lower than H. 
+
+With metadata$group, I define a biological order from healthy to stage 3 fibrosis. dds2 is a second DESeq2 object, with the order taken into account. For an ordinal factor, several coding methods are possible : treatment as a continuous variable, orthogonal polynomials, linear trend test and quadratic trend test. DESeq2 does expression = β0 + β1 × fibrosis_score and β1 can be read as the log2FC.
+
+The padj is the same for all genes : problem of experimental design, particularly with the healthy control.
+
+The pseudobulk differential trend analysis across MASLD fibrosis stages did not reveal a strong enrichment of canonical MAIT cell activation, cytotoxicity, inflammatory, or exhaustion-associated genes. Instead, the most significant genes were enriched for cell cycle/proliferation-related genes (TPX2, ASPM, PLK1, BIRC5), immune signaling and survival pathways (BCL2A1, IRAK2, CRACR2A), and miscellaneous metabolic or structural genes.
+
+1. Immune signalisation and cellular survival : BCL2A1, IRAK2, CRACR2A, ITGAL, ALCAM, SPN and LGALS9
+BCL2A1 is an anti-apoptotic gene often induced during inflammatory activation and which plays a role in lymphocytes survival. It implies more of a modification of the state of survival/cellular response than a frank cytotoxic programme.
+
+2. Cell proliferation : TPX2, ASPM, PLK1 and BIRC5
+Those genes are really classical of the cellular cycle. If log2FC is positive, this could suggest an increase in the proliferation of MAIT cells during the disease progression. This may be one of the most striking signals of the list.
+
+3. Inflammasome / innate immunity : NLRP3, IRAK2 and PILRB
+NLRP3 is interesting because it is linked to innate inflammatory pathways. However here again, a true inflammatory signature would generally be accompanied by pro-inflammatory cytokines or chimiokines, which is not the case here.
+
+4. TCR : There are several TCR segments : TRBV14, TRBV6-5, TRBV24-1 and TRAV12-2
+Their biological interpretation should be taken cautiously. In the pseudobulk analysis, TCR genes can above all reflect : clonal expansion, clonotypic composition, or the relative proportion of some clones.
+
+vst() (Variance Stabilising Transformation) transforms the data in such a way that: the values remain comparable across samples, the variance is more consistent across the entire range of expression and distance analyses (PCA, clustering, heatmaps) become interpretable. On the graph, one dot = one patient.
+
+```{r}
+top10 = c("ERP29", "TRBV14", "LIMS1", "FAM149A", "DALRD3", "ZNF92", "LINC00996", "COMMD6", "LST1", "MED31") # gene more differentially expressed across stages of the disease
+MAIT_cluster$fb_stage = factor(MAIT_cluster$fb_stage, levels = c("H","F0","F1","F2","F3"))
+VlnPlot(MAIT_cluster, features = "ERP29", group.by = "fb_stage", pt.size = 0) # one gene
+VlnPlot(MAIT_cluster, features = top10, group.by = "fb_stage", pt.size = 0, ncol = 2) # all genes together
+DotPlot(MAIT_cluster, features = top10, group.by = "fb_stage") + RotatedAxis()
+```
+
+# Pathway analysis
+
+It it quite usual to have several identical Rho values because fibrotic stages only take 5 values (0→4), Spearman correlations are calculated from this ranking and in scRNA-seq, a lot of genes have a huge amount of zeros. Thus, those genes are ranked arbitrarily. 26.43% is quite a lot, but not surprising in this case. The results shall be taken with precaution but the confidence is reasonably high when I filter padj < 0.05, NES > 1.5 and NES < -1.5. The main problem is that cells are not independent replicas, so I will use the pseudobulk I did earlier.
+
+```{r}
+# LIMITATION
+table(metadata$group)
+
+# Ranking
+ranks = res_2$stat
+names(ranks) = rownames(res_2)
+ranks = ranks[!is.na(ranks)] # Take out the missing values
+ranks = sort(ranks, decreasing = TRUE)
+
+# Hallmark
+## BiocManager::install("fgsea")
+library(fgsea)
+## install.packages("msigdbr")
+library(msigdbr)
+library(dplyr)
+hallmark = msigdbr(species = "Homo sapiens", collection = "H")
+head(hallmark)
+pathways = split(hallmark$gene_symbol, hallmark$gs_name)
+
+# GSEA
+library(BiocParallel)
+register(SerialParam())
+
+fgseaRes1 = fgsea(pathways = pathways, stats = ranks, minSize = 15, maxSize = 500) # Ties decreased from 26.43% to 18.31%.
+fgseaRes1 %>% # take out the most significative pathways
+  arrange(padj) %>%
+  head(20)
+
+fgseaRes2 = fgseaRes1 %>%
+  arrange(padj)
+head(fgseaRes2[,c("pathway","NES","padj")],20)
+
+# Do Leading edge genes to know which genes drive the changing pathways
+# Create a table pathway/gene
+library(tidyr)
+library(purrr)
+library(dplyr)
+library(tibble)
+leading_edge_table = fgseaRes2 %>%
+  as_tibble() %>%
+  filter(padj < 0.05) %>%
+  select(pathway, leadingEdge) %>%
+  tidyr::unnest(cols = c(leadingEdge))
+```
+
+```{r}
+# Which genes appear more often in the changing pathways ?
+leading_edge_freq = leading_edge_table %>%
+  group_by(leadingEdge) %>%
+  summarise(n_pathways = n()) %>%
+  arrange(desc(n_pathways))
+# Visualise the most important genes
+top_10_genes = leading_edge_freq %>%
+  arrange(desc(n_pathways)) %>%
+  head(10)
+ggplot(top_10_genes, aes(x = reorder(leadingEdge, n_pathways), y = n_pathways, fill = leadingEdge)) + geom_col() + coord_flip() + theme_bw() + scale_fill_manual(values = c(
+  "#FF006E", # Rose fuchsia
+  "#FB5607", # Orange vif
+  "#FFBE0B", # Jaune doré
+  "#06D6A0", # Vert menthe
+  "#00B4D8", # Bleu cyan
+  "#3A86FF", # Bleu électrique
+  "#8338EC", # Violet
+  "#EF476F", # Rose framboise
+  "#118AB2", # Bleu océan
+  "#8AC926"  # Vert citron
+)) + labs(title = "Top leading-edge genes", x = "Gene", y = "Number of enriched pathways") + guides(fill = "none")
+```
+
+The Hallmarks are a collection of 50 biological signatures well-defined : IFNγ response, IFNα response, TNFα signaling, Oxidative phosphorylation, Fatty acid metabolism, TGFβ signaling... FGSEA looks at if genes coming from a certain pathway are concentrated up (positive enrichment) or down (negative enrichment) the sorting.
+
+The NES (Normalized Enrichment Score) is the main statistical value : positive ==> activation with fibrosis progression and negative ==> progressive loss of this function during the evolution of fibrosis.
+
+The ranking is very important and uses the 'stat' column. The ‘stat’ column in the `results()` function in DESeq2 corresponds to the Wald statistic. In my case (design = ~ fibrosis_score), it tests the hypothesis:
+
+- H0: the coefficient associated with fibrosis_score is equal to 0 (gene expression does not vary with the stage of fibrosis).
+
+- H1: this coefficient is not equal to 0 (expression increases or decreases with the stage of fibrosis).
+
+The statistic is calculated as: stat=β/SE(β) with β, the coefficient estimated by DESeq2 (the effect of the fibrosis score on gene expression) and SE(β) its standard error. In other words, stat measures the size of the effect relative to its uncertainty.
+
+```{r}
+leading_edge_counts = leading_edge_table %>%
+  dplyr::group_by(pathway) %>%
+  dplyr::summarise(
+    n_leading_genes = dplyr::n(),
+    .groups = "drop"
+  ) %>%
+  dplyr::arrange(desc(n_leading_genes))
+leading_edge_counts
+
+res_2_df = as.data.frame(res_2) %>%
+  tibble::rownames_to_column("leadingEdge")
+leading_edge_counts_direction = leading_edge_table %>%
+  left_join(res_2_df %>%
+  dplyr::select(leadingEdge, log2FoldChange), by = "leadingEdge") %>%
+  dplyr::mutate(direction = ifelse(log2FoldChange > 0, "Up", "Down")) %>%
+  dplyr::group_by(pathway, direction) %>%
+  dplyr::summarise(n_genes = dplyr::n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = direction, values_from = n_genes, values_fill = 0)
+leading_edge_counts_direction
+```
+X axis : all stages / Y axis : genes
+Trend should be visible
+
+```{r}
+selected_pathways = c("HALLMARK_FATTY_ACID_METABOLISM", "HALLMARK_COMPLEMENT", "HALLMARK_INFLAMMATORY_RESPONSE", "HALLMARK_OXIDATIVE_PHOSPHORYLATION", "HALLMARK_INTERFERON_GAMMA_RESPONSE")
+leading_df = fgseaRes2 %>%
+  dplyr::filter(pathway %in% selected_pathways) %>%
+  tidyr::unnest_longer(leadingEdge)
+genes_use = unique(leading_df$leadingEdge) # Suppress the doubles
+expr_mat = pseudo$RNA[genes_use, ] # Take the pseudobulk matrix
+expr_df = as.data.frame(t(expr_mat)) # Calculate the mean per stage
+expr_df$Patient_ID = gsub("^g", "", colnames(expr_mat))
+expr_df = left_join(expr_df, metadata_patient, by = c("Patient_ID" = "patient_id"))
+avg_stage = expr_df %>%
+  group_by(fb_stage) %>% # fb_stage.y would have worked, it is identical
+  summarise(across(where(is.numeric), mean))
+
+# Transform to long format
+heatmap_df = avg_stage %>%
+  pivot_longer(cols = -fb_stage, names_to = "gene", values_to = "expression")
+
+# Associate each gene to its pathway
+gene_pathway = leading_df %>%
+  select(pathway, gene = leadingEdge) %>%
+  distinct()
+heatmap_df = left_join(heatmap_df, gene_pathway, by = "gene")
+
+# Recommended : z score for each gene
+heatmap_df = heatmap_df %>%
+  group_by(gene) %>%
+  mutate(zscore = scale(expression)[,1]) %>%
+  ungroup()
+heatmap_df$fb_stage = factor(heatmap_df$fb_stage, levels = c("H", "F0", "F1", "F2", "F3")) # Order the stages
+
+# Facet heatmap
+ggplot(heatmap_df, aes(x = fb_stage, y = gene, fill = zscore)) + geom_tile() + facet_wrap(~ pathway, scales = "free_y", ncol = 2) + scale_fill_gradient2(low = "navy", mid = "white", high = "firebrick", midpoint = 0) + theme_minimal() + theme(axis.text.y = element_text(size = 6), strip.text = element_text(face = "bold"), panel.grid = element_blank()) + labs(x = "Fibrosis stage", y = NULL, fill = "Z-score")
+```
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE))
+    # install.packages("BiocManager")
+# BiocManager::install("viper")
+# BiocManager::install("dorothea")
+library(dorothea)
+library(viper)
+library(dplyr)
+data(dorothea_hs)
+# Only keep the interactions with high level of confidence
+dorothea_highconf = dorothea_hs %>%
+  dplyr::filter(confidence %in% c("A","B","C"))
+regulon = dorothea::df2regulon(dorothea_highconf)
+
+# Getting all the activated transcription factors that interact with the changing genes of each pathway
+res_viper_df = as.data.frame(res_2)
+gene_stat = res_viper_df$stat # stat is often better than log2FoldChange because it combines effect and variance
+names(gene_stat) = rownames(res_viper_df)
+gene_stat = gene_stat[!is.na(gene_stat)]
+gene_stat = sort(gene_stat, decreasing = TRUE)
+
+tf_activity = viper(gene_stat, regulon, minsize = 5, eset.filter = FALSE)
+tf_activity
+
+tf_activity_df = data.frame(tf = rownames(tf_activity), viper_score = tf_activity[,1])
+pathway_tf_viper = leading_edge_table %>%
+  inner_join(dorothea_highconf, by = c("leadingEdge" = "target")) %>%
+  inner_join(tf_activity_df, by = "tf")
+pathway_tf_summary = pathway_tf_viper %>%
+  group_by(pathway, tf) %>%
+  summarise(n_targets = n_distinct(leadingEdge), viper_score = dplyr::first(viper_score), .groups = "drop") %>%
+  arrange(pathway, desc(abs(viper_score)))
+
+pathway_tf_summary = pathway_tf_summary %>%
+  mutate(combined_score = abs(viper_score) * n_targets) %>%
+  arrange(desc(combined_score))
+top_tfs = pathway_tf_summary %>%
+  group_by(pathway) %>%
+  slice_max(order_by = combined_score, n = 10)
+library(openxlsx)
+write.xlsx(top_tfs, file = "Top_TFs_per_pathway.xlsx", rowNames = FALSE)
+```
+
+tf = transcription factor, target = leading-edge gene and mor = mode of regulation (+1 activation, -1 repression)
+
+VIPER (Virtual Inference of Protein-activity by Enriched Regulon analysis) estimates the activity of some transcription factors using its targets' behaviour. Viper doesn't use the expression of the transcription factor itself, but the coordinated behaviour of all its target genes.
+
+| Score | Interpretation          |
+| ----- | ----------------------- |
+| > 2   | activation forte        |
+| 1 à 2 | activation modérée      |
+| \~0   | pas d'évidence          |
+| < -2  | répression/inactivation |
+
+The combined score multiplies the viper score to the number of leading genes controlled by the transcription factor. This score allows to detect both the highly activated and higly pathway-connected transcription factors.
+
+```{r}
+# Try waterfall
+library(SeuratExtend)
+library(DelayedMatrixStats)
+library(dplyr)
+
+MAIT_cluster = GeneSetAnalysis(MAIT_cluster, genesets = hall50$human)
+matr = MAIT_cluster@misc$AUCell$genesets
+table(MAIT_cluster$fb_stage)
+stage_map = c("H" = 0, "F0" = 1, "F1" = 2, "F2" = 3, "F3" = 4)
+auc.df = as.data.frame(t(matr))
+auc.df$patient = MAIT_cluster$Patient_ID
+auc.df$stage = MAIT_cluster$fb_stage
+auc.df$stage_num = stage_map[auc.df$stage]
+head(auc.df[, c("patient","stage","stage_num")])
+auc.patient = auc.df %>%
+  group_by(patient, stage_num) %>%
+  summarise(across(where(is.numeric), mean), groups = "drop")
+pathways = setdiff(colnames(auc.patient), c("patient", "stage_num", "groups"))
+rho_results = lapply(pathways, function(pw){
+  test = cor.test(auc.patient[[pw]], auc.patient$stage_num, method = "spearman", exact = FALSE)
+  data.frame(pathway = pw, rho = as.numeric(test$estimate), pval = test$p.value)
+})
+rho_results = bind_rows(rho_results)
+rho_results$padj = p.adjust(rho_results$pval, method = "BH")
+head(rho_results)
+summary(rho_results$rho)
+
+top_pos = rho_results %>%
+  arrange(desc(rho)) %>%
+  slice_head(n = 15)
+top_neg = rho_results %>%
+  arrange(rho) %>%
+  slice_head(n = 15)
+top_pw = bind_rows(top_neg, top_pos)
+library(ggplot2)
+ggplot(top_pw, aes(x = reorder(pathway, rho), y = rho, fill = rho)) + geom_col()+ coord_flip()+ theme_bw()
+```
+
+I will now select the 10 most significant pathways (5 positive and 5 negative) and illustrate each one of them.
+
+```{r}
+top_5_pos = rho_results %>%
+  arrange(desc(rho)) %>%
+  slice_head(n = 5)
+top_5_neg = rho_results %>%
+  arrange(rho) %>%
+  slice_head(n = 5)
+top_10_pw = bind_rows(top_5_neg, top_5_pos)
+
+auc.patient.plot = auc.patient %>%
+  ungroup()
+library(tidyr)
+plot_df = auc.patient.plot %>%
+  select(stage_num, all_of(top_10_pw$pathway)) %>%
+  pivot_longer(cols = -stage_num, names_to = "pathway", values_to = "score")
+ggplot(plot_df, aes(stage_num, score)) + geom_point(size = 2) + geom_smooth(method = "lm", color = "aquamarine", se = TRUE) + facet_wrap(~ pathway, scales = "free_y") +  theme_bw()
+```
+
+```{r}
+# Heatmap per patient
+selected_pathways2 = top_pw$pathway
+mat = auc.patient[, selected_pathways2]
+mat = as.matrix(mat)
+rownames(mat) = auc.patient$patient
+mat = t(mat)
+mat.scaled = t(scale(t(mat)))
+annotation_col = data.frame(Stage = auc.patient$stage_num)
+rownames(annotation_col) = auc.patient$patient
+library(pheatmap)
+pheatmap(mat.scaled, annotation_col = annotation_col, cluster_cols = TRUE, fontsize_row = 7)
+```
+
+
+# Sub-clustering of MAIT cells
+
+```{r}
+library(Seurat)
+MAIT = FindVariableFeatures(MAIT_cluster, selection.method = "vst", nfeatures = 2000)
+head(VariableFeatures(MAIT))
+MAIT = ScaleData(MAIT)
+MAIT = RunPCA(MAIT, features = VariableFeatures(MAIT))
+ElbowPlot(MAIT) # I am keeping 15 dimensions because the populations is already quite homogenous
+MAIT = FindNeighbors(MAIT, dims = 1:15)
+MAIT = FindClusters(MAIT, resolution = 0.2) # 6 communities
+table(Idents(MAIT))
+MAIT = RunUMAP(MAIT, dims = 1:15)
+DimPlot(MAIT, label = TRUE)
+markers_MAIT = FindAllMarkers(MAIT, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+markers_MAIT %>%
+  group_by(cluster) %>%
+  slice_max(avg_log2FC, n = 10)
+
+```
+
+In the liver, the most common MAIT populations are : Cytotoxic MAIT, Activated MAIT, Proliferating MAIT, Tissue resident MAIT, Exhausted MAIT, MAIT IL-17-like.
+
+```{r}
+FeaturePlot(MAIT, features = c("CXCR6", "KLRB1", "SLC4A10", "TRAV1-2", "RORC", "PRF1", "IFNG", "TNF"))
+```
+
+1. The specific receptor (TCR) and restriction
+TRAV1-2 and TRAJ33: Code for the invariant alpha chain of the T-cell receptor (TCRα). MR1: Gene for the antigen-presenting molecule (major histocompatibility complex class Ib) that activates MAIT cells. TRBV6, TRBV13, TRBV19, TRBV20: Genes encoding the beta chain of the TCR, which confers a degree of diversity on the repertoire.
+2. Surface and Homing Receptors
+SLC4A10: A major marker specifically identifying MAIT cells. KLRB1: Encodes the CD161 protein, a lectin-type receptor characteristic of MAIT cells. CXCR6 and CCR6: Chemokine genes crucial for the recruitment and retention of these cells in liver tissue.
+3. Transcription factors
+ZBTB16: Encodes the PLZF transcription factor, essential for the development and effector programme of MAIT cells. RORC: Encodes the RORγt factor, a regulator of innate immunity and IL-17 production. TBX21: Encodes T-bet, involved in the production of IFN-γ.
+4. Effector Functions (Cytokines and Cytotoxicity)
+IFNG: Encodes interferon gamma (IFN-γ), involved in antimicrobial defence. TNF: Encodes tumour necrosis factor alpha (TNF-α). IL17A and IL17F: Code for interleukins 17, involved in inflammation. GZMB and PRF1: Code for granzyme B and perforin respectively, key agents in their cytotoxic activity.
+5. Regulation and adaptation of liver tissue
+RUNX3: Regulates the differentiation and adaptation of MAIT cells as tissue-resident lymphocytes in the liver. IL12RB1 and IL18R1: Receptor genes for the cytokines IL-12 and IL-18, enabling TCR-independent inflammatory activation
+
+```{r}
+best_MAIT_markers = markers_MAIT %>%
+  group_by(cluster) %>%
+  slice_max(avg_log2FC, n = 20, with_ties = FALSE)
+write.xlsx(best_MAIT_markers, "Best_MAIT_markers.xlsx", rowNames = FALSE)
+
+VlnPlot(MAIT, features = c("TRAV1-2", "SLC4A10", "KLRB1", "CXCR6"), group.by = "seurat_clusters")
+```
+
+Cluster 0 : Activated MAIT17-like cells
+
+Cluster 1 : MAIT17-like  cells (CCR6⁺ CCL20⁺) + migration signature
+
+Cluster 2 : Cytotoxic MAIT cells NK-like
+
+Cluster 3 : Activated cytotoxic MAIT (HLA-II⁺ ZEB2⁺)
+Potential myeloid contamination
+
+Cluster 4 : GZMH⁺ MAIT*
+
+Cluster 5 : XIST⁺ MAIT/Patient-specific
+
+```{r}
+table(MAIT$Patient_ID, Idents(MAIT))
+cluster_importance = prop.table(table(MAIT$seurat_clusters))
+```
+
+# Exhaustion score
+
+```{r}
+DotPlot(MAIT, features = c("PDCD1", "TIGIT", "LAG3", "HAVCR2", "TOX", "TOX2", "CTLA4", "ENTPD1")) + RotatedAxis()
+```
+
+
+```{r}
+exhaustion_genes = c("PDCD1", "TIGIT", "LAG3", "HAVCR2", "TOX", "CTLA4", "ENTPD1")
+MAIT = AddModuleScore(MAIT, features = list(exhaustion_genes), name = "Exhaustion")
+VlnPlot(MAIT, features = "Exhaustion1", group.by = "seurat_clusters")
+```
+
+Careful : In healthy or MASLD hepatic MAIT cells, PDCD1, HAVCR2 et LAG3 are often weakly expressed in scRNA-seq (dropout); the score may be noisy.
+
+# Activation score for MAIT cells
+
+```{r}
+# activation_genes = c("CD69", "IL7R", "TNF", "IFNG", "JUN", "FOS", "DUSP1"), precoce
+activation_genes = c("CD69", "TNF", "IFNG", "JUN", "FOS")
+MAIT = AddModuleScore(MAIT, features = list(activation_genes), name = "Activation")
+VlnPlot(MAIT, features = "Activation1", group.by = "seurat_clusters")
+```
+
+# Cytotoxicity score for MAIT cells
+
+```{r}
+cytotoxicity_genes = c("NKG7", "PRF1", "GZMB", "GZMK", "GNLY", "CTSW", "KLRD1")
+MAIT = AddModuleScore(MAIT, features = list(cytotoxicity_genes), name = "Cytotoxicity")
+VlnPlot(MAIT, features = "Cytotoxicity1", group.by = "seurat_clusters")
+```
+
+# Analysis of these scores simultaneously
+
+```{r}
+FeatureScatter(MAIT, feature1 = "Activation1", feature2 = "Exhaustion1")
+FeatureScatter(MAIT, feature1 = "Cytotoxicity1", feature2 = "Exhaustion1")
+FeatureScatter(MAIT, feature1 = "Cytotoxicity1", feature2 = "Activation1")
+```
+
+All three Pearson correlation scores are very low, thus I cannot conclude that there is a proportional relation between cytotoxicity, activation and exhaustion.
+
+# Comparing these scores in the MASLD context
+
+```{r}
+VlnPlot(MAIT, features = c("Exhaustion1", "Activation1", "Cytotoxicity1"), group.by = "fb_stage", pt.size = 0.5)
+library(SeuratExtend)
+VlnPlot2(MAIT,features = c("Exhaustion1", "Activation1", "Cytotoxicity1"), group.by = "fb_stage", pt.size = 0.2, show.mean = TRUE, mean_colors = c("red", "blue"), cols = "light", ncol = 1)
+VlnPlot2(MAIT, features = c("Exhaustion1", "Activation1", "Cytotoxicity1"), group.by = "fb_stage", stat.method = "wilcox.test", hide.ns = TRUE)
+```
+
+```{r}
+patient_scores = MAIT@meta.data %>% # Use the median per patient, less sensitive to outliers
+  group_by(Patient_ID, fb_stage) %>%
+  summarise(Exhaustion = median(Exhaustion1), Activation = median(Activation1), Cytotoxicity = median(Cytotoxicity1), .groups = "drop")
+graphique = patient_scores %>%
+  pivot_longer(cols = c(Exhaustion, Activation, Cytotoxicity), names_to = "Score_type", values_to = "Score")
+graphique$stage_num = c("H" = 0, "F0" = 1, "F1" = 2, "F2" = 3, "F3" = 4)[graphique$fb_stage]
+ggplot(graphique, aes(stage_num, Score)) + geom_point(size = 2) + geom_smooth(method = "lm", color = "deeppink", se = TRUE) + facet_wrap(~ Score_type, scales = "free_y") + theme_bw()
+```
+
+
+
+Then, I will do the same using my pseudobulk before performing statistical tests, in order to avoid the problem of pseudoreplication caused by the large number of cells derived from a small number of patients.
+
+The combination of Activation + Cytotoxicity + Exhaustion is much more informative than the exhaustion score alone and could reveal an ‘activated → activated cytotoxic → dysfunctional/exhausted’ continuum as fibrosis progresses.
+
+```{r}
+# With the pseudobulk
+expr_log = log2(pseudo$RNA + 1)
+expr_z = t(scale(t(expr_log)))
+compute_signature_score = function(mat, genes){
+  genes_present = intersect(genes, rownames(mat))
+  score = colMeans(mat[genes_present, , drop = FALSE])
+  return(score)
+}
+metadata$Activation_z = compute_signature_score(expr_z, activation_genes)
+metadata$Cytotoxicity_z = compute_signature_score(expr_z, cytotoxicity_genes)
+metadata$Exhaustion_z = compute_signature_score(expr_z, exhaustion_genes)
+head(metadata[, c("patient", "group", "Activation_z", "Cytotoxicity_z", "Exhaustion_z")])
+```
+
+My idea is simple: define the signatures, extract the genes present, calculate the average expression of the signature for each patient and compare the scores between H, F0, F1, F2 and F3. I use the z-transformed score because the mean is often influenced by the global level of expression.
+
+```{r}
+# Visualisation
+ggplot(metadata, aes(x = group, y = Activation_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Activation score (z)") + xlab("Fibrosis stage")
+ggplot(metadata, aes(x = group, y = Cytotoxicity_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Cytotoxicity score (z)") + xlab("Fibrosis stage")
+ggplot(metadata, aes(x = group, y = Exhaustion_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Exhaustion score (z)") + xlab("Fibrosis stage")
+
+```
+
+```{r}
+library(tidyr)
+scores_long = metadata |>
+  select(patient, group, Activation_z, Cytotoxicity_z, Exhaustion_z) |>
+  pivot_longer(cols = c(Activation_z, Cytotoxicity_z, Exhaustion_z), names_to = "ScoreType", values_to = "Score")
+ggplot(scores_long, aes(group, Score)) + geom_boxplot() + geom_jitter(width = 0.1) + facet_wrap(~ScoreType, scales = "free_y") + theme_classic()
+```
+
+Let's try with a Heatmap. It will be possible to see if some F3 patients simultaneously present : high exhaustion, high cytotoxicity and high activation, or if these programmes are independent.
+
+```{r}
+library(pheatmap)
+mat = metadata |>
+  select(Activation_z, Cytotoxicity_z, Exhaustion_z)
+mat = as.matrix(mat)
+rownames(mat) = metadata$group
+pheatmap(mat, scale = "none", cluster_rows = TRUE, cluster_cols = FALSE)
+```
+
+Do the most cytotoxic MAIT cells also become the most exhausted during fibrosis progresssion ?
+
+```{r}
+cor.test(metadata$Cytotoxicity_z, metadata$Exhaustion_z, method = "spearman")
+```
+
+This result is really interesting : the patients whose MAIT cells highly express cytotoxicity genes are the same whose MAIT cells highly express exhaustion genes. High positive correlation (0.88) and very little possibility of being wrong (p-value 1.0318e-06).
+
+```{r}
+cor.test(metadata$fibrosis_score, metadata$Cytotoxicity_z, method = "spearman")
+cor.test(metadata$fibrosis_score, metadata$Exhaustion_z, method = "spearman")
+```
+
+Because these results are not significant, I cannot say that cytotoxicity and exhaustion increase with fibrosis.
+
+# Calculating the proportional evolution of each population through MASLD stages
+
+```{r}
+prop.table(table(MAIT$fb_stage, MAIT$seurat_clusters), margin = 1)
+```
+
+```{r}
+library(ggplot2)
+evolutional_bar_plot = as.data.frame(table(Condition = MAIT$fb_stage, Cluster = MAIT$seurat_clusters))
+ggplot(evolutional_bar_plot, aes(x = Condition, y = Freq, fill = Cluster)) + geom_bar(stat = "identity", position = "fill") + ylab("Proportion") + theme_classic()
+```
+
+Each bar represents 100 % of a group's MAIT cells.
+
+Let's now calculate the proportions for each patient, highly recommended) in scRNA-seq. It is particularly essential here because the samples are very unbalanced.
+
+```{r}
+table(MAIT$Patient_ID, MAIT$seurat_clusters)
+cluster_prop = MAIT@meta.data %>%
+  group_by(Patient_ID, fb_stage, seurat_clusters) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Patient_ID) %>%
+  mutate(prop = n / sum(n)) # Proportion of each cluster for each individual
+cluster_summary = cluster_prop %>%
+  group_by(fb_stage, seurat_clusters) %>%
+  summarise(mean_prop = mean(prop), .groups = "drop") # mean of proportions
+ggplot(cluster_summary, aes(x = fb_stage, y = mean_prop, fill = factor(seurat_clusters))) + geom_bar(stat = "identity") + ylab("Mean proportion per patient") + labs(fill = "Cluster") + theme_classic()
+```
+
+```{r}
+# Other representation : Heatmap
+ggplot(cluster_summary, aes(x = fb_stage, y = factor(seurat_clusters), fill = mean_prop)) + geom_tile() + scale_fill_viridis_c() + theme_classic() + labs(x = "", y = "MAIT cluster", fill = "Mean proportion")
+# Other representation : Curve
+cluster_summary_2 = cluster_prop %>%
+  group_by(fb_stage, seurat_clusters) %>%
+  summarise(mean_prop = mean(prop), se_prop = sd(prop)/sqrt(n()), .groups = "drop")
+ggplot(cluster_summary_2, aes(x = fb_stage, y = mean_prop, colour = factor(seurat_clusters), group = seurat_clusters)) + geom_line(linewidth = 1) + geom_point(linewidth = 3) + theme_classic()
+```
+
+This is particularly useful for identifying : clusters that gradually increase as fibrosis progresses, clusters that disappear and clusters that only appear in advanced stages.
+
+# Diabetes
+
+```{r}
+library(Matrix)
+library(DESeq2)
+pb = AggregateExpression(MAIT, group.by = "Patient_ID", assays = "RNA", return.seurat = FALSE)$RNA
+colnames(pb) = sub("^g", "", colnames(pb))
+meta_pb = unique(MAIT@meta.data[, c("Patient_ID", "diabetes")])
+meta_pb = meta_pb[match(colnames(pb), meta_pb$Patient_ID),]
+
+rownames(meta_pb) = meta_pb$Patient_ID
+all(colnames(pb) == rownames(meta_pb))
+meta_pb$diabetes = factor(meta_pb$diabetes, levels = c("No", "Yes"))
+dds_diab = DESeqDataSetFromMatrix(countData = pb, colData = meta_pb, design = ~ diabetes)
+dds_diab = DESeq(dds_diab)
+res_diabetes = results(dds_diab)
+```
+
+```{r}
+DimPlot(MAIT, group.by = "diabetes", reduction = "umap")
+```
+
+```{r}
+# Proportion of each cluster according to the status
+prop_df = MAIT@meta.data %>%
+  group_by(diabetes, seurat_clusters) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(diabetes) %>%
+  mutate(prop = n / sum(n))
+ggplot(prop_df, aes(x = seurat_clusters, y = prop, fill = diabetes)) + geom_bar(stat = "identity", position = "dodge") + theme_classic()
+```
+
+
+Do diabetic patients have more or less MAIT cells than non diabetic patients ?
+
+```{r}
+# Counting per patient
+mait_counts = MAIT@meta.data %>%
+  group_by(Patient_ID, diabetes) %>%
+  summarise(n_MAIT = n())
+mait_counts
+ggplot(mait_counts, aes(x = diabetes, y = n_MAIT, fill = diabetes)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + labs(x = "Diabetes", y = "Number of MAIT cells")
+```
+
+```{r}
+# Statistical analysis
+wilcox.test(n_MAIT ~ diabetes, data = mait_counts) # no significant
+```
+
+```{r}
+mait_counts %>%
+  group_by(diabetes) %>%
+  summarise(median = median(n_MAIT), mean = mean(n_MAIT), sd = sd(n_MAIT), n = n())
+```
+
+A trend towards an increase in the number of MAIT cells was observed in non-diabetic patients compared with diabetic patients, but this difference did not reach the threshold for statistical significance (Wilcoxon test, p = 0.10).
+
+I now want to work on the proportion of MAIT cells per patient, not the number.
+
+```{r}
+# Total cells per patient
+total_cells = table(seurat_liver$Patient_ID)
+total_cells
+
+# Total MAIT cells per patient
+total_mait_cells = table(MAIT$Patient_ID)
+total_mait_cells
+
+# Recapitulative table
+df_total = data.frame(patient = names(total_cells), total_cells = as.numeric(total_cells))
+df_mait = data.frame(patient = names(total_mait_cells), mait_cells = as.numeric(total_mait_cells))
+diabetes_info = seurat_liver@meta.data %>%
+  select(Patient_ID, diabetes) %>%
+  distinct()
+proportion_table = df_total %>%
+  left_join(df_mait, by = "patient") %>%
+  mutate(mait_cells = replace_na(mait_cells, 0), percent_MAIT = (mait_cells / total_cells)*100)
+proportion_table = proportion_table %>%
+  left_join(diabetes_info, by = c("patient" = "Patient_ID"))
+proportion_table
+```
+
+```{r}
+ggplot(proportion_table, aes(x = diabetes, y = percent_MAIT, fill = diabetes)) + geom_boxplot(width = 0.6, alpha = 0.7, outlier.shape = NA) + geom_jitter(width = 0.15, size = 3, alpha = 0.8) + labs(x = "", y = "% of MAIT cells", title = "Proportion of MAIT cells according to diabetes status") + theme_classic() + theme(legend.position = "none")
+```
+
+```{r}
+wilcox.test(percent_MAIT ~ diabetes, data = proportion_table)
+```
+
+```{r}
+stage_info = seurat_liver@meta.data %>%
+  select(Patient_ID, fb_stage) %>%
+  distinct()
+proportion_table = proportion_table %>%
+  left_join(stage_info, by = c("patient" = "Patient_ID"))
+proportion_table
+```
+
+# Combining F2 and F3
+
+I will now try to combine these stages, due to the lack of samples.
+
+```{r}
+DimPlot(MAIT, group.by = "fb_stage") # TRAJECTORY ANALYSIS
+```
+
+```{r}
+# Copying MAIT object
+MAIT_F23 = MAIT
+MAIT_F23$fibrosis_group = case_when(MAIT_F23$fb_stage %in% c("F2", "F3") ~ "F2-3", TRUE ~ as.character(MAIT_F23$fb_stage))
+MAIT_F23$fibrosis_group = factor(MAIT_F23$fibrosis_group, levels = c("H", "F0", "F1", "F2-3"))
+table(MAIT_F23$fb_stage)
+table(MAIT_F23$fibrosis_group)
+```
+
+```{r}
+# Proportions in the sub-clusters
+# Patient_ID = patients and seurat_clusters = clusters MAIT
+cluster_counts = MAIT_F23@meta.data %>%
+  group_by(Patient_ID, fibrosis_group, seurat_clusters) %>%
+  summarise(n_cells = n(), .groups = "drop")
+patient_totals = MAIT_F23@meta.data %>%
+  group_by(Patient_ID) %>%
+  summarise(total_cells = n())
+cluster_props = cluster_counts %>%
+  left_join(patient_totals, by = "Patient_ID") %>%
+  mutate(prop = n_cells / total_cells)
+ggplot(cluster_props, aes(x = fibrosis_group, y = prop, fill = fibrosis_group)) + geom_boxplot() + geom_jitter(width = 0.2) + facet_wrap(~ seurat_clusters)
+```
+
+```{r}
+# Pseudobulk DESeq2 with merged F2 and F3
+counts_bis = GetAssayData(MAIT_F23, layer = "counts")
+meta_bis = MAIT_F23@meta.data
+library(Matrix)
+pb_bis = rowsum(t(as.matrix(counts_bis)), group = meta_bis$Patient_ID)
+pb_bis = t(pb_bis)
+sample_metadata = meta_bis %>%
+  select(Patient_ID, fibrosis_group) %>%
+  distinct()
+rownames(sample_metadata) = sample_metadata$Patient_ID
+sample_metadata = sample_metadata[colnames(pb_bis),]
+table(sample_metadata$fibrosis_group)
+
+dds_merged = DESeqDataSetFromMatrix(countData = pb_bis, colData = sample_metadata, design = ~ fibrosis_group)
+dds_merged = DESeq(dds_merged)
+res_F23_vs_F0 = as.data.frame(results(dds_merged, contrast = c("fibrosis_group", "F2-3", "F0")))
+sig_F23_vs_F0 = res_F23_vs_F0 %>%
+  filter(!is.na(padj) & padj < 0.05) # 8 genes
+```
+
+```{r}
+# Continuous trend analysis
+meta_bis$fibrosis_score = case_when(meta_bis$fibrosis_group == "H"    ~ 0, meta_bis$fibrosis_group == "F0"   ~ 1, meta_bis$fibrosis_group == "F1"   ~ 2, meta_bis$fibrosis_group == "F2-3" ~ 3)
+
+sample_metadata_merged = meta_bis %>%
+  select(Patient_ID, fibrosis_score) %>%
+  distinct()
+rownames(sample_metadata_merged) = sample_metadata_merged$Patient_ID
+sample_metadata_merged = sample_metadata_merged[colnames(pb_bis), ]
+
+dds_merged2 = DESeqDataSetFromMatrix(countData = pb_bis, colData = sample_metadata_merged, design = ~ fibrosis_score)
+dds_merged2 = DESeq(dds_merged2)
+res_merged2 = results(dds_merged2)
+
+gene_list = res_merged2$stat
+names(gene_list) = rownames(res_merged2)
+gene_list = gene_list[!is.na(gene_list)]
+gene_list = sort(gene_list, decreasing = TRUE)
+
+library(msigdbr)
+library(fgsea)
+hallmark_df = msigdbr(species = "Homo sapiens", category = "H")
+pathways2 = split(hallmark_df$gene_symbol, hallmark_df$gs_name)
+
+changing_pathways = fgsea(pathways = pathways2, stats = gene_list)
+fgsea_filtered = changing_pathways %>%
+  filter(padj < 0.05) # Keeping the most significant according to the adjusted p value
+```
+
+```{r}
+fgsea_up = fgsea_filtered %>%
+  filter(NES > 0) %>%
+  arrange(desc(NES)) # Positive NES ==> increase with disease
+fgsea_up
+```
+
+```{r}
+fgsea_down = fgsea_filtered %>%
+  filter(NES < 0) %>%
+  arrange(NES) # Negative NES ==> decrease with disease
+fgsea_down
+```
+
+```{r}
+# Visualization
+fgsea_sig = fgsea_filtered %>%
+  arrange(NES)
+ggplot(fgsea_sig, aes(x = reorder(pathway, NES), y = NES, fill = NES)) + geom_col() + coord_flip() + scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) + theme_bw() + labs(x = "", y = "Normalized Enrichment Score (NES)")
+```
+
+```{r}
+library(purrr)
+top_genes_per_pathway = fgsea_filtered %>%
+  select(pathway, leadingEdge) %>%
+  unnest(leadingEdge) %>%
+  mutate(stat = gene_list[leadingEdge]) %>%
+  group_by(pathway) %>%
+  arrange(desc(abs(stat)), .by_group = TRUE) %>%
+  slice_head(n = 3) %>%
+  summarise(top_genes = paste(leadingEdge, collapse = ", "), .groups = "drop")
+top_genes_per_pathway
+```
+
+```{r}
+MAIT_F23 = AddModuleScore(MAIT_F23, features = list(cytotoxicity_genes), name = "Cytotoxicity")
+MAIT_F23 = AddModuleScore(MAIT_F23, features = list(activation_genes), name = "Activation")
+MAIT_F23 = AddModuleScore(MAIT_F23, features = list(exhaustion_genes), name = "Exhaustion")
+VlnPlot(MAIT_F23, features = c("Cytotoxicity1", "Activation1", "Exhaustion1"), group.by = "fibrosis_group", pt.size = 0.2, ncol = 3)
+```
+
+```{r}
+VlnPlot2(MAIT_F23, features = c("Exhaustion1", "Activation1", "Cytotoxicity1"), group.by = "fibrosis_group", stat.method = "wilcox.test", hide.ns = TRUE)
+```
+
+```{r}
+# It is far more rigorous to consider that a patient is a biological unit rather than cells
+patient_scores_2 = MAIT_F23@meta.data %>%
+  group_by(Patient_ID, fibrosis_group) %>%
+  summarise(Cytotoxicity = median(Cytotoxicity1), Activation = median(Activation1), Exhaustion = median(Exhaustion1), .groups = "drop") %>%
+  mutate(fibrosis_score = case_when(fibrosis_group == "H"    ~ 0, fibrosis_group == "F0"   ~ 1, fibrosis_group == "F1"   ~ 2, fibrosis_group == "F2-3" ~ 3))
+
+cor.test(patient_scores_2$Cytotoxicity, patient_scores_2$fibrosis_score, method = "spearman")
+cor.test(patient_scores_2$Activation, patient_scores_2$fibrosis_score, method = "spearman")
+cor.test(patient_scores_2$Exhaustion, patient_scores_2$fibrosis_score, method = "spearman")
+```
+
+```{r}
+graphique_2 = patient_scores_2 %>%
+  pivot_longer(cols = c(Exhaustion, Activation, Cytotoxicity), names_to = "Score_type", values_to = "Score")
+graphique_2$stage_num = c("H" = 0, "F0" = 1, "F1" = 2, "F2-3" = 3)[graphique_2$fibrosis_group]
+ggplot(graphique_2, aes(stage_num, Score)) + geom_point(size = 2) + geom_smooth(method = "lm", color = "gold", se = TRUE) + facet_wrap(~ Score_type, scales = "free_y") + theme_bw()
+```
+
+
+```{r}
+cluster_prop_merged = MAIT_F23@meta.data %>%
+  group_by(Patient_ID, fibrosis_group, seurat_clusters) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Patient_ID) %>%
+  mutate(prop = n / sum(n))
+
+cluster_summary_merged = cluster_prop_merged %>%
+  group_by(fibrosis_group, seurat_clusters) %>%
+  summarise(mean_prop = mean(prop), .groups = "drop")
+ggplot(cluster_summary_merged, aes(x = fibrosis_group, y = mean_prop, fill = factor(seurat_clusters))) + geom_bar(stat = "identity") + ylab("Mean proportion per patient") + xlab("Fibrosis stage") + labs(fill = "Cluster") + theme_classic()
+```
+
+```{r}
+# Other representation : Curve
+cluster_summary_2 = cluster_prop_merged %>%
+  group_by(fibrosis_group, seurat_clusters) %>%
+  summarise(mean_prop = mean(prop), se_prop = sd(prop) / sqrt(n()), .groups = "drop")
+
+ggplot(cluster_summary_2, aes(x = fibrosis_group, y = mean_prop, colour = factor(seurat_clusters), group = seurat_clusters)) + geom_line(linewidth = 1) + geom_point(size = 3) + theme_classic() + labs(x = "Fibrosis stage", y = "Mean proportion per patient", colour = "MAIT cluster")
+```
+
