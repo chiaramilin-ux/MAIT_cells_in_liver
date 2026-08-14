@@ -862,9 +862,6 @@ table(sample_metadata$fibrosis_group)
 
 dds_merged = DESeqDataSetFromMatrix(countData = pb_bis, colData = sample_metadata, design = ~ fibrosis_group)
 dds_merged = DESeq(dds_merged)
-res_F23_vs_F0 = as.data.frame(results(dds_merged, contrast = c("fibrosis_group", "F2-3", "F0")))
-sig_F23_vs_F0 = res_F23_vs_F0 %>%
-  filter(!is.na(padj) & padj < 0.05) # 8 genes
 ```
 
 ```{r}
@@ -899,14 +896,17 @@ fgsea_filtered = changing_pathways %>%
 ```{r}
 fgsea_up = fgsea_filtered %>%
   filter(NES > 0) %>%
-  arrange(desc(NES)) # Positive NES ==> increase with disease
+  arrange(desc(NES)) %>% # Positive NES ==> increase with disease
+  select(pathway, NES, padj)
 fgsea_up
 ```
 
 ```{r}
+# Negative NES ==> decrease with disease
 fgsea_down = fgsea_filtered %>%
   filter(NES < 0) %>%
-  arrange(NES) # Negative NES ==> decrease with disease
+  arrange(NES) %>%
+  select(pathway, NES, padj)
 fgsea_down
 ```
 
@@ -918,16 +918,16 @@ ggplot(fgsea_sig, aes(x = reorder(pathway, NES), y = NES, fill = NES)) + geom_co
 ```
 
 ```{r}
-library(purrr)
-top_genes_per_pathway = fgsea_filtered %>%
-  select(pathway, leadingEdge) %>%
-  unnest(leadingEdge) %>%
-  mutate(stat = gene_list[leadingEdge]) %>%
-  group_by(pathway) %>%
-  arrange(desc(abs(stat)), .by_group = TRUE) %>%
-  slice_head(n = 3) %>%
-  summarise(top_genes = paste(leadingEdge, collapse = ", "), .groups = "drop")
-top_genes_per_pathway
+res_merged2_df = as.data.frame(res_merged2) %>%
+  tibble::rownames_to_column("leadingEdge")
+leading_edge_counts_direction = leading_edge_table_merged %>%
+  left_join(res_merged2_df %>%
+  dplyr::select(leadingEdge, log2FoldChange), by = "leadingEdge") %>%
+  dplyr::mutate(direction = ifelse(log2FoldChange > 0, "Up", "Down")) %>%
+  dplyr::group_by(pathway, direction) %>%
+  dplyr::summarise(n_genes = dplyr::n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = direction, values_from = n_genes, values_fill = 0)
+leading_edge_counts_direction
 ```
 
 ```{r}
@@ -968,18 +968,94 @@ cluster_prop_merged = MAIT_F23@meta.data %>%
   group_by(Patient_ID) %>%
   mutate(prop = n / sum(n))
 
-cluster_summary_merged = cluster_prop_merged %>%
-  group_by(fibrosis_group, seurat_clusters) %>%
-  summarise(mean_prop = mean(prop), .groups = "drop")
-ggplot(cluster_summary_merged, aes(x = fibrosis_group, y = mean_prop, fill = factor(seurat_clusters))) + geom_bar(stat = "identity") + ylab("Mean proportion per patient") + xlab("Fibrosis stage") + labs(fill = "Cluster") + theme_classic()
-```
-
-```{r}
-# Other representation : Curve
-cluster_summary_2 = cluster_prop_merged %>%
+cluster_summary = cluster_prop_merged %>%
   group_by(fibrosis_group, seurat_clusters) %>%
   summarise(mean_prop = mean(prop), se_prop = sd(prop) / sqrt(n()), .groups = "drop")
 
-ggplot(cluster_summary_2, aes(x = fibrosis_group, y = mean_prop, colour = factor(seurat_clusters), group = seurat_clusters)) + geom_line(linewidth = 1) + geom_point(size = 3) + theme_classic() + labs(x = "Fibrosis stage", y = "Mean proportion per patient", colour = "MAIT cluster")
+ggplot(cluster_summary, aes(x = fibrosis_group, y = mean_prop, colour = factor(seurat_clusters), group = seurat_clusters)) + geom_line(linewidth = 1) + geom_point(size = 3) + theme_classic() + labs(x = "Fibrosis stage", y = "Mean proportion per patient", colour = "MAIT cluster")
 ```
+
+Now, my aim is to find the transcription factors that could be responsible of that changes in these pathways. For each pathway: I identify the transcription factors (TFs) described in the literature (DoRothEA), then I extract the ones expressed in my MAIT cells, select those significantly associated with the progression of fibrosis and finally I calculate the number of key genes they regulate.
+
+```{r}
+library(dorothea)
+library(viper)
+library(dplyr)
+data(dorothea_hs)
+
+leading_edge_table_merged = fgsea_filtered %>%
+  select(pathway, NES, leadingEdge) %>%
+  unnest(leadingEdge)
+
+# Only keep the interactions between TF and genes with high level of confidence
+dorothea_highconf = dorothea_hs %>%
+  dplyr::filter(confidence %in% c("A","B","C"))
+# Associate each gene of the leading edge with his known transcription factors
+pathway_tf = leading_edge_table_merged %>%
+  inner_join(dorothea_highconf, by = c("leadingEdge" = "target")) # one gene can appear in several pathways and be regulated by several transcription factors
+# Prepare the results of DESeq2
+tf_expression = as.data.frame(res_merged2) %>%
+  tibble::rownames_to_column("tf")
+# Only look at transcription factors that are in the data
+pathway_tf_expr = pathway_tf %>%
+  inner_join(tf_expression, by = "tf")
+# Link pathways and transcription factors
+pathway_tf_summary = pathway_tf_expr %>%
+  group_by(pathway, tf) %>%
+  summarise(n_targets = n_distinct(leadingEdge), log2FC = dplyr::first(log2FoldChange), stat = dplyr::first(stat), pvalue = dplyr::first(pvalue), padj = dplyr::first(padj), .groups = "drop")
+# Calculate a priority score
+pathway_tf_summary = pathway_tf_summary %>%
+  mutate(priority_score = abs(stat) * sqrt(n_targets))
+# Classify the transcription factors
+pathway_tf_summary = pathway_tf_summary %>%
+  mutate(direction = case_when(stat > 0 ~ "Increases_with_fibrosis", stat < 0 ~ "Decreases_with_fibrosis", TRUE ~ NA_character_)) %>%
+  arrange(desc(priority_score))
+# Take out the best transcription factors for each pathway
+top_tfs = pathway_tf_summary %>%
+  group_by(pathway) %>%
+  slice_max(order_by = priority_score, n = 10, with_ties = FALSE) # classify by priority score because transcription factors go to the nucleus and tend not to be detected really well in scRNA-seq so I don't give to much imortance to the significativity
+# Export to Excel
+library(openxlsx)
+write.xlsx(top_tfs, file = "Top_TFs_pathways_F23_merged.xlsx", rowNames = FALSE)
+```
+
+The idea behind the score is to combine two pieces of information : the importance of the TF in MY study, represented by stat (the higher |stat| is, the more strongly the TF is associated with the progression of fibrosis) and the importance of the TF in the pathway, represented by n_targets (the more leading-edge genes a TF regulates, the more likely it is to contribute to the pathway signal). I use the square root of the number of targets in order to prevent genes with a really high number of targets being overestimated in their role in MASLD.
+
+# Number of MAIT cells according to the stade of MASLD
+
+```{r}
+stage_info = seurat_liver@meta.data %>%
+  select(Patient_ID, fb_stage) %>%
+  distinct()
+
+proportion_table = proportion_table %>%
+  left_join(stage_info, by = c("patient" = "Patient_ID"))
+library(ggplot2)
+
+ggplot(proportion_table, aes(x = fb_stage, y = mait_cells)) +
+  geom_boxplot(outlier.shape = NA, fill = "lightblue") +
+  geom_jitter(width = 0.15, size = 3) + theme_classic() +
+  labs(x = "MASLD stage",
+    y = "Number of MAIT cells",
+    title = "Number of MAIT cells according to the disease stage")
+
+ggplot(proportion_table, aes(x = fb_stage, y = percent_MAIT)) +
+  geom_boxplot(outlier.shape = NA, fill = "salmon") +
+  geom_jitter(width = 0.15, size = 3) + theme_classic() +
+  labs(x = "MASLD stage",
+    y = "% of MAIT cells",
+    title = "Proportion of MAIT cells according to the MASLD stage")
+
+summary_stage = proportion_table %>%
+  group_by(fb_stage) %>%
+  summarise(mean_MAIT = mean(mait_cells), sd_MAIT = sd(mait_cells), n = n())
+
+ggplot(summary_stage, aes(x = fb_stage, y = mean_MAIT, group = 1)) +
+  geom_line(size = 1.2) + geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_MAIT - sd_MAIT,
+                    ymax = mean_MAIT + sd_MAIT), width = 0.1) + theme_classic() +
+  labs(x = "MASLD stage", y = "Mean number of MAIT cells",
+    title = "Evolution of MAIT cells across MASLD progression")
+```
+
 
