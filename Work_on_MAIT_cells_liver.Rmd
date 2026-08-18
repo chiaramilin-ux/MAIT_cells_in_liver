@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+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
+
 # MAIT cells identification
 
 As MAIT cells have not been identified as a cluster, I will use 5 characteristical genes to separate them. I am working in the liver, on MAIT cells, some genes are characteristic : KLRB1 (CD161), SLC4A10 : allows to dissociate MAIT cells from T cells, TRAV1-2 : almost invariant alpha chain of the TCR, RORC : Transcription factor associated to effective MAIT cells, particularly the ones producing IL-17 and IL7R (CD127).
@@ -633,14 +635,6 @@ head(metadata[, c("patient", "group", "Activation_z", "Cytotoxicity_z", "Exhaust
 My idea is simple: define the signatures, extract the genes present, calculate the average expression of the signature for each patient and compare the scores between H, F0, F1, F2 and F3. I use the z-transformed score because the mean is often influenced by the global level of expression.
 
 ```{r}
-# Visualisation
-ggplot(metadata, aes(x = group, y = Activation_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Activation score (z)") + xlab("Fibrosis stage")
-ggplot(metadata, aes(x = group, y = Cytotoxicity_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Cytotoxicity score (z)") + xlab("Fibrosis stage")
-ggplot(metadata, aes(x = group, y = Exhaustion_z)) + geom_boxplot(outlier.shape = NA) + geom_jitter(width = 0.15, size = 3) + theme_classic() + ylab("Exhaustion score (z)") + xlab("Fibrosis stage")
-
-```
-
-```{r}
 library(tidyr)
 scores_long = metadata |>
   select(patient, group, Activation_z, Cytotoxicity_z, Exhaustion_z) |>
@@ -918,6 +912,9 @@ ggplot(fgsea_sig, aes(x = reorder(pathway, NES), y = NES, fill = NES)) + geom_co
 ```
 
 ```{r}
+leading_edge_table_merged = fgsea_filtered %>%
+  select(pathway, NES, leadingEdge) %>%
+  unnest(leadingEdge)
 res_merged2_df = as.data.frame(res_merged2) %>%
   tibble::rownames_to_column("leadingEdge")
 leading_edge_counts_direction = leading_edge_table_merged %>%
@@ -1032,14 +1029,14 @@ proportion_table = proportion_table %>%
   left_join(stage_info, by = c("patient" = "Patient_ID"))
 library(ggplot2)
 
-ggplot(proportion_table, aes(x = fb_stage, y = mait_cells)) +
+ggplot(proportion_table, aes(x = fb_stage.x, y = mait_cells)) +
   geom_boxplot(outlier.shape = NA, fill = "lightblue") +
   geom_jitter(width = 0.15, size = 3) + theme_classic() +
   labs(x = "MASLD stage",
     y = "Number of MAIT cells",
     title = "Number of MAIT cells according to the disease stage")
 
-ggplot(proportion_table, aes(x = fb_stage, y = percent_MAIT)) +
+ggplot(proportion_table, aes(x = fb_stage.x, y = percent_MAIT)) +
   geom_boxplot(outlier.shape = NA, fill = "salmon") +
   geom_jitter(width = 0.15, size = 3) + theme_classic() +
   labs(x = "MASLD stage",
@@ -1047,10 +1044,10 @@ ggplot(proportion_table, aes(x = fb_stage, y = percent_MAIT)) +
     title = "Proportion of MAIT cells according to the MASLD stage")
 
 summary_stage = proportion_table %>%
-  group_by(fb_stage) %>%
+  group_by(fb_stage.x) %>%
   summarise(mean_MAIT = mean(mait_cells), sd_MAIT = sd(mait_cells), n = n())
 
-ggplot(summary_stage, aes(x = fb_stage, y = mean_MAIT, group = 1)) +
+ggplot(summary_stage, aes(x = fb_stage.x, y = mean_MAIT, group = 1)) +
   geom_line(size = 1.2) + geom_point(size = 3) +
   geom_errorbar(aes(ymin = mean_MAIT - sd_MAIT,
                     ymax = mean_MAIT + sd_MAIT), width = 0.1) + theme_classic() +
