@@ -951,6 +951,15 @@ cor.test(patient_scores_2$Exhaustion, patient_scores_2$fibrosis_score, method = 
 ```
 
 ```{r}
+cor.test(patient_scores_2$Cytotoxicity, patient_scores_2$Exhaustion, method = "spearman")
+cor.test(patient_scores_2$Cytotoxicity, patient_scores_2$Activation, method = "spearman")
+cor.test(patient_scores_2$Activation, patient_scores_2$Exhaustion, method = "spearman")
+ggplot(patient_scores_2, aes(Cytotoxicity, Activation, color = fibrosis_group)) +
+  geom_point(size = 4) + geom_smooth(method = "lm", se = FALSE)
+```
+
+
+```{r}
 graphique_2 = patient_scores_2 %>%
   pivot_longer(cols = c(Exhaustion, Activation, Cytotoxicity), names_to = "Score_type", values_to = "Score")
 graphique_2$stage_num = c("H" = 0, "F0" = 1, "F1" = 2, "F2-3" = 3)[graphique_2$fibrosis_group]
