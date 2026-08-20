@@ -280,6 +280,10 @@ ggplot(proportion_table, aes(x = diabetes, y = percent_MAIT, fill = diabetes)) +
 
 ```{r}
 wilcox.test(percent_MAIT ~ diabetes, data = proportion_table)
+MAIT_normalized_summary = proportion_table %>%
+  group_by(diabetes) %>%
+  summarise(median = median(percent_MAIT), mean = mean(percent_MAIT), sd = sd(percent_MAIT), n = n())
+MAIT_normalized_summary
 ```
 
 ```{r}
@@ -293,11 +297,33 @@ proportion_table
 
 # Combining F2 and F3
 
-I will now try to combine these stages, due to the lack of samples.
+I will now try to combine these stages, due to the lack of samples. Are F2-F3 correlations similar to F2-F2 or F3-F3 correlations ?
 
 ```{r}
-DimPlot(MAIT, group.by = "fb_stage") # TRAJECTORY ANALYSIS
+library(DESeq2)
+vsd = vst(dds_2, blind = TRUE)
+expr = assay(vsd)
+cor_mat = cor(expr)
+groups = colData(dds_2)$group
+names(groups) = colnames(dds_2)
+
+cor_df = data.frame()
+for(i in 1:(ncol(cor_mat)-1)){
+  for(j in (i+1):ncol(cor_mat)){
+    sample1 = colnames(cor_mat)[i]
+    sample2 = colnames(cor_mat)[j]
+    grp1 = groups[sample1]
+    grp2 = groups[sample2]
+    comparison = paste(sort(c(grp1, grp2)), collapse = "-")
+    cor_df = rbind(cor_df, data.frame(correlation = cor_mat[i,j], comparison = comparison))
+  }
+}
+pairwise.wilcox.test(cor_df$correlation, cor_df$comparison, p.adjust.method = "BH")
+library(ggplot2)
+ggplot(cor_df, aes(comparison, correlation, fill = comparison)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_classic()
 ```
+
+I can now merge F2 and F3.
 
 ```{r}
 # Copying MAIT object
@@ -543,6 +569,8 @@ ggplot(proportion_table, aes(x = fb_stage.x, y = percent_MAIT)) +
 summary_stage = proportion_table %>%
   group_by(fb_stage.x) %>%
   summarise(mean_MAIT = mean(mait_cells), sd_MAIT = sd(mait_cells), n = n())
+
+summary_stage$fb_stage.x = factor(summary_stage$fb_stage.x, levels = c("H", "F0", "F1", "F2", "F3"))
 
 ggplot(summary_stage, aes(x = fb_stage.x, y = mean_MAIT, group = 1)) +
   geom_line(size = 1.2) + geom_point(size = 3) +
