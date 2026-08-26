@@ -637,14 +637,6 @@ DimPlot(MAIT_F23, group.by = "subset", cols = cols, label = FALSE)
 ```
 
 🟣 Violet électrique + jaune safran — #7B2CBF + #F4B942
-→ Très vif, moderne, avec un contraste fort.
-
 🩵 Turquoise vif + corail — #00B8A9 + #FF6B6B
-→ Dynamique et élégant, sans être trop « corporate ».
-
 🟠 Orange mandarine + bleu indigo — #FF7A00 + #3A0CA3
-→ Probablement mon choix pour quelque chose de très visuel et original.
-
 🩷 Fuchsia + vert menthe soutenu — #D81B60 + #00A878
-→ Plus audacieux, très sympa pour une présentation.
-
