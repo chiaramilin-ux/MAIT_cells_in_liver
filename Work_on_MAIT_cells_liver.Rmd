@@ -20,7 +20,7 @@ However, hepatic MAIT cells often present a strong expression of genes linked wi
 Thus, I will use the panel : KLRB1, SLC4A10, CXCR6, TRAV1-2 and ZBTB16 to distinguish MAIT cells from NK cells, conventional CD8 T cells and NKT cells.
 
 ```{r}
-mait_genes = c("KLRB1", "SLC4A10", "CXCR6", "TRAV1-2", "ZBTB16")
+mait_genes = c("KLRB1", "SLC4A10", "TRAV1-2", "ZBTB16") # CRCR6 can be in there as well
 mait_genes %in% rownames(seurat_liver) # check if they are present in the object
 ```
 
@@ -198,6 +198,9 @@ VlnPlot(MAIT_cluster, features = "ERP29", group.by = "fb_stage", pt.size = 0) # 
 VlnPlot(MAIT_cluster, features = top10, group.by = "fb_stage", pt.size = 0, ncol = 2) # all genes together
 DotPlot(MAIT_cluster, features = top10, group.by = "fb_stage") + RotatedAxis()
 ```
+
+
+
 
 # Pathway analysis
 

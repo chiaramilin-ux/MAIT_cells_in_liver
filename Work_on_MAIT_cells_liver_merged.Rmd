@@ -20,7 +20,7 @@ However, hepatic MAIT cells often present a strong expression of genes linked wi
 Thus, I will use the panel : KLRB1, SLC4A10, CXCR6, TRAV1-2 and ZBTB16 to distinguish MAIT cells from NK cells, conventional CD8 T cells and NKT cells.
 
 ```{r}
-mait_genes = c("KLRB1", "SLC4A10", "CXCR6", "TRAV1-2", "ZBTB16")
+mait_genes = c("KLRB1", "SLC4A10", "TRAV1-2", "ZBTB16") # CXCR6
 mait_genes %in% rownames(seurat_liver) # check if they are present in the object
 ```
 
@@ -135,9 +135,10 @@ MAIT = ScaleData(MAIT)
 MAIT = RunPCA(MAIT, features = VariableFeatures(MAIT))
 ElbowPlot(MAIT) # I am keeping 15 dimensions because the populations is already quite homogenous
 MAIT = FindNeighbors(MAIT, dims = 1:15)
-MAIT = FindClusters(MAIT, resolution = 0.2) # 6 communities
+MAIT = FindClusters(MAIT, resolution = 0.2) # 7 communities
 table(Idents(MAIT))
-MAIT = RunUMAP(MAIT, dims = 1:15)
+set.seed(123)
+MAIT = RunUMAP(MAIT, dims = 1:15, seed.use = 123)
 DimPlot(MAIT, label = TRUE)
 markers_MAIT = FindAllMarkers(MAIT, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 markers_MAIT %>%
@@ -173,23 +174,28 @@ write.xlsx(best_MAIT_markers, "Best_MAIT_markers.xlsx", rowNames = FALSE)
 VlnPlot(MAIT, features = c("TRAV1-2", "SLC4A10", "KLRB1", "CXCR6"), group.by = "seurat_clusters")
 ```
 
-Cluster 0 : Activated MAIT17-like cells
+Cluster 0 : Activated MAIT 17-like cells (CCR6+ IL23R+)
 
-Cluster 1 : MAIT17-like  cells (CCR6⁺ CCL20⁺) + migration signature
+Cluster 1 : Activated antigen-presenting MAIT (HLA-II+)
 
-Cluster 2 : Cytotoxic MAIT cells NK-like
+Cluster 2 : NK-like MAIT (NCR1⁺ XCL1⁺ FCER1G⁺)
 
-Cluster 3 : Activated cytotoxic MAIT (HLA-II⁺ ZEB2⁺)
-Potential myeloid contamination
+Cluster 3 : RORC+ helper MAIT cells
 
-Cluster 4 : GZMH⁺ MAIT*
+Cluster 4 : Terminal cytotoxic MAIT (FGFBP2⁺ GZMB⁺ GNLY⁺)
 
-Cluster 5 : XIST⁺ MAIT/Patient-specific
+Cluster 5 : Clonotypic MAIT or TRBV-enriched MAIT
+
+Cluster 6 : Resting / quiescent MAIT
+
+Potential continuum : Cluster 3 (MAIT17/tissulaire) → Cluster 2 (NK-like MAIT) → Cluster 4 (cytotoxic MAIT terminale)
 
 ```{r}
 table(MAIT$Patient_ID, Idents(MAIT))
 cluster_importance = prop.table(table(MAIT$seurat_clusters))
 ```
+
+Cluster 5 was relatively rare and showed enrichment for TCR variable genes, suggesting possible clonal expansion rather than a distinct functional state.
 
 # Diabetes
 
@@ -301,6 +307,13 @@ I will now try to combine these stages, due to the lack of samples. Are F2-F3 co
 
 ```{r}
 library(DESeq2)
+# Differential analysis
+metadata$group = factor(metadata$group, levels = c("H","F0","F1","F2","F3"), ordered = TRUE)
+metadata$fibrosis_score = c(0,1,2,3,4)[match(metadata$group,c("H","F0","F1","F2","F3"))]
+dds_trend = DESeqDataSetFromMatrix(countData = pseudo$RNA, colData = metadata, design = ~ fibrosis_score)
+dds_2 = DESeq(dds_trend)
+res_2 = results(dds_2)
+
 vsd = vst(dds_2, blind = TRUE)
 expr = assay(vsd)
 cor_mat = cor(expr)
@@ -391,6 +404,8 @@ library(fgsea)
 hallmark_df = msigdbr(species = "Homo sapiens", category = "H")
 pathways2 = split(hallmark_df$gene_symbol, hallmark_df$gs_name)
 
+library(BiocParallel)
+register(SerialParam())
 changing_pathways = fgsea(pathways = pathways2, stats = gene_list)
 fgsea_filtered = changing_pathways %>%
   filter(padj < 0.05) # Keeping the most significant according to the adjusted p value
@@ -417,7 +432,7 @@ fgsea_down
 # Visualization
 fgsea_sig = fgsea_filtered %>%
   arrange(NES)
-ggplot(fgsea_sig, aes(x = reorder(pathway, NES), y = NES, fill = NES)) + geom_col() + coord_flip() + scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) + theme_bw() + labs(x = "", y = "Normalized Enrichment Score (NES)")
+ggplot(fgsea_sig, aes(x = reorder(pathway, NES), y = NES, fill = NES)) + geom_col() + coord_flip() + scale_fill_gradient2(low = "#F4B942", mid = "white", high = "#7B2CBF", midpoint = 0) + theme_bw() + labs(x = "", y = "Normalized Enrichment Score (NES)")
 ```
 
 ```{r}
@@ -580,4 +595,56 @@ ggplot(summary_stage, aes(x = fb_stage.x, y = mean_MAIT, group = 1)) +
     title = "Evolution of MAIT cells across MASLD progression")
 ```
 
+# Check the MAIT cells' immunophenotype
+
+The litterature states that about 80% of the MAIT cells are CD8+ and 20% are CD8-/CD4-. CD4+ MAIT cells are very rare. Let's see if I find the same proportions.
+
+```{r}
+FeaturePlot(MAIT_F23, features = c("CD4", "CD8A", "CD8B"))
+```
+
+Careful ! CD8A is generally better detected than CD8B.
+
+```{r}
+MAIT_F23 = AddModuleScore(MAIT_F23, features = list(c("CD8A","CD8B")), name = "CD8score")
+MAIT_F23 = AddModuleScore(MAIT_F23, features = list(c("CD4")), name = "CD4score")
+head(MAIT_F23@meta.data[,c("CD8score1","CD4score1")])
+
+cd4_expr = FetchData(MAIT_F23, "CD4")[,1]
+cd8_expr = FetchData(MAIT_F23, "CD8A")[,1]
+
+MAIT_F23$subset = case_when(
+    cd8_expr > 0 & cd4_expr == 0 ~ "CD8_MAIT",
+    cd4_expr > 0 & cd8_expr == 0 ~ "CD4_MAIT",
+    cd4_expr > 0 & cd8_expr > 0 ~ "Double_Positive",
+    TRUE ~ "Double_Negative")
+
+table(MAIT_F23$subset)
+prop.table(table(MAIT_F23$subset)) * 100
+```
+
+CD4+ and double positive are coherent with literature. CD8+ are quite low and double negative are very high but this can be explained by the difficulty in detecting CD8A and CD8B in scRNA-seq. At least half of the double negative should be CD8+.
+
+```{r}
+VlnPlot(MAIT_F23, features = c("NKG7","PRF1","GZMK","KLRD1"), group.by = "subset")
+```
+
+To justify this affirmation, the previous graph shows that double negative express very highly cytotoxic genes, characteristic of CD8+ MAIT cells.
+
+```{r}
+cols = c("CD8_MAIT" = "#F4B942", "CD4_MAIT" = "#D81B60", "Double_Positive" = "#33a02c", "Double_Negative" = "#3A0CA3")
+DimPlot(MAIT_F23, group.by = "subset", cols = cols, label = FALSE)
+```
+
+🟣 Violet électrique + jaune safran — #7B2CBF + #F4B942
+→ Très vif, moderne, avec un contraste fort.
+
+🩵 Turquoise vif + corail — #00B8A9 + #FF6B6B
+→ Dynamique et élégant, sans être trop « corporate ».
+
+🟠 Orange mandarine + bleu indigo — #FF7A00 + #3A0CA3
+→ Probablement mon choix pour quelque chose de très visuel et original.
+
+🩷 Fuchsia + vert menthe soutenu — #D81B60 + #00A878
+→ Plus audacieux, très sympa pour une présentation.
 
