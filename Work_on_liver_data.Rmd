@@ -170,23 +170,9 @@ seurat_liver.markers %>%
   dplyr::filter(avg_log2FC > 1)
 
 marqueurs = table(seurat_liver.markers$cluster)
-write.xlsx(marqueurs, "Tableau_marqueurs.xlsx", rowNames = FALSE) # Number of cells in each cluster
-write.xlsx(seurat_liver.markers, "Marqueurs_par_cluster.xlsx", rowNames = FALSE) # All the markers in each cluster
-
-top_markers = seurat_liver.markers %>%
-  group_by(cluster) %>%
-  filter(avg_log2FC > 1) %>%
-  slice_max(order_by = avg_log2FC, n = 10) %>%  # top 10 markers per cluster
-  ungroup()
-write.xlsx(top_markers, "Meilleurs_marqueurs_par_cluster.xlsx", rowNames = FALSE)
-
-seurat_liver@misc$markers = FindAllMarkers(seurat_liver, min.pct = 0.25, logfc.threshold = 0.25)
-table(seurat_liver@misc$markers$cluster)
-top10_markers = as.data.frame(seurat_liver@misc$markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC))
-top10_markers
-
 library(openxlsx)
-write.xlsx(top10_markers, "Best_markers_by_cluster.xlsx", rowNames = FALSE)
+write.xlsx(marqueurs, "Table_markers.xlsx", rowNames = FALSE) # Number of cells in each cluster
+write.xlsx(seurat_liver.markers, "Total_markers_by_cluster.xlsx", rowNames = FALSE) # All the markers in each cluster
 ```
 
 In "Best_markers_by_cluster.xlsx" :
@@ -199,18 +185,11 @@ In "Best_markers_by_cluster.xlsx" :
 
 So I end up with:the genes that are overexpressed in the cluster (positive log2FC) and the genes that are underexpressed in the cluster (negative log2FC).
 
-
-In "Meilleurs_marqueurs_par_cluster.xlsx", only the genes with avg_log2FC > 0 are selected.
-
 ```{r}
 seurat_liver.markers = FindAllMarkers(seurat_liver, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 top20_markers = seurat_liver.markers %>%
     group_by(cluster) %>%
-    slice_max(
-        order_by = avg_log2FC,
-        n = 20,
-        with_ties = FALSE
-    ) %>%
+    slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE) %>%
     ungroup()
 write.xlsx(top20_markers, "Final_selection_of_clusters.xlsx", rowNames = FALSE)
 DoHeatmap(seurat_liver, features = top20_markers$gene) + NoLegend()
