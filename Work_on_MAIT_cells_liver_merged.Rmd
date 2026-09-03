@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-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
+THIS SCRIPT AND THE "Work_on_MAIT_cells_liver.Rmd" ARE EQUIVALENT, BUT THIS ONE IS THE ONE CORRESPONDING TO THE PRESENTED RESULTS.
 
 # MAIT cells identification
 
