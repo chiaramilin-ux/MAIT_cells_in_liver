@@ -243,7 +243,7 @@ ggplot(mait_counts, aes(x = diabetes, y = n_MAIT, fill = diabetes)) + geom_boxpl
 
 ```{r}
 # Statistical analysis
-wilcox.test(n_MAIT ~ diabetes, data = mait_counts) # no significant
+wilcox.test(n_MAIT ~ diabetes, data = mait_counts) # not significant
 ```
 
 ```{r}
@@ -451,6 +451,10 @@ leading_edge_counts_direction = leading_edge_table_merged %>%
 leading_edge_counts_direction
 ```
 
+# Activation, exhaustion and cytotoxicity scores
+
+This code could be re-run with less genes for each category.
+
 ```{r}
 exhaustion_genes = c("PDCD1", "TIGIT", "LAG3", "HAVCR2", "TOX", "CTLA4", "ENTPD1")
 activation_genes = c("CD69", "TNF", "IFNG", "JUN", "FOS")
@@ -495,6 +499,7 @@ graphique_2$stage_num = c("H" = 0, "F0" = 1, "F1" = 2, "F2-3" = 3)[graphique_2$f
 ggplot(graphique_2, aes(stage_num, Score)) + geom_point(size = 2) + geom_smooth(method = "lm", color = "gold", se = TRUE) + facet_wrap(~ Score_type, scales = "free_y") + theme_bw()
 ```
 
+# Cluster repartition
 
 ```{r}
 cluster_prop_merged = MAIT_F23@meta.data %>%
@@ -597,7 +602,7 @@ ggplot(summary_stage, aes(x = fb_stage.x, y = mean_MAIT, group = 1)) +
 
 # Check the MAIT cells' immunophenotype
 
-The litterature states that about 80% of the MAIT cells are CD8+ and 20% are CD8-/CD4-. CD4+ MAIT cells are very rare. Let's see if I find the same proportions.
+The literature states that about 80% of the MAIT cells are CD8+ and 20% are CD8-/CD4-. CD4+ MAIT cells are very rare. Let's see if I find the same proportions.
 
 ```{r}
 FeaturePlot(MAIT_F23, features = c("CD4", "CD8A", "CD8B"))

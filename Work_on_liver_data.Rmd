@@ -202,18 +202,11 @@ VlnPlot(seurat_liver, features = c("CD3D", "LCK"))
 ```
 
 ```{r}
-# you can plot counts as well
 VlnPlot(seurat_liver, features = c("LTB", "CD2"), layer = "counts", log = TRUE)
 ```
 
 ```{r}
 FeaturePlot(seurat_liver, features = c("CD3D", "CD3E", "CD2", "CD52", "IL32", "CD3G", "LCK", "IL7R", "CD48"))
-```
-
-DoHeatmap() generates an expression heatmap for given cells and features. In this case, I am plotting the top 10 markers (or all markers if less than 10) for each cluster.
-
-```{r}
-DoHeatmap(seurat_liver, features = top10$gene) + NoLegend()
 ```
 
 Now I am going to examine the file "Final_selected_markers.xlsx" to do research on the 20 most important markers for each cluster and try to annotate them.
@@ -222,7 +215,7 @@ Now I am going to examine the file "Final_selected_markers.xlsx" to do research 
 # Azimuth
 
 ```{r}
-devtools::install_github("satijalab/AzimuthAPI")
+# devtools::install_github("satijalab/AzimuthAPI")
 library(Seurat)
 library(AzimuthAPI)
 library(dplyr)
